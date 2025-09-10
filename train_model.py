@@ -18,27 +18,42 @@ df = pd.read_csv("odisha_crop_data.csv", parse_dates=["sowing_date", "harvest_da
 
 # 2) Feature engineering
 df["harvest_days"] = (df["harvest_date"] - df["sowing_date"]).dt.days
-df["sowing_doy"] = df["sowing_date"].dt.dayofyear.fillna(-1)
+df["sowing_doy"] = df["sowing_date"].dt.dayofyear
 
-# Features
-feature_cols = [
-    "district", "crop", "season", "sowing_doy",
+# Input features (only these will be provided by user)
+input_features = ["district", "crop", "season", "sowing_doy"]
+
+# Target features (all these will be predicted by the model)
+target_cols = [
     "season_total_rainfall_mm", "season_avg_temp_c", "season_avg_humidity",
     "soil_pH", "soil_N_kg_ha", "soil_P_kg_ha", "soil_K_kg_ha", 
-    "organic_carbon_pct", "soil_moisture_pct"
+    "organic_carbon_pct", "soil_moisture_pct",
+    "fertilizer_N_kg_ha", "fertilizer_P_kg_ha", "fertilizer_K_kg_ha",
+    "yield_kg_per_ha", "harvest_days"
 ]
 
-# Targets (what we want to predict)
-target_cols = ["yield_kg_per_ha", "harvest_days"]
+# Debug: Check what columns actually exist in the dataset
+print("Columns in dataset:", list(df.columns))
+print("Target columns:", target_cols)
 
-# Filter only required cols
-df = df[feature_cols + target_cols].copy()
+# Filter only existing columns
+existing_cols = [col for col in (input_features + target_cols) if col in df.columns]
+df = df[existing_cols].copy()
+
+# Update target_cols to only include existing columns
+target_cols = [col for col in target_cols if col in df.columns]
+print("Target columns after filtering:", target_cols)
 
 # Drop rows with missing target values
 df = df.dropna(subset=target_cols)
+print(f"Dataset shape after preprocessing: {df.shape}")
 
-X = df[feature_cols]
+X = df[input_features]
 y = df[target_cols]
+
+print(f"X shape: {X.shape}, y shape: {y.shape}")
+print(f"X columns: {list(X.columns)}")
+print(f"y columns: {list(y.columns)}")
 
 # 3) Train/test split
 X_train, X_test, y_train, y_test = train_test_split(
@@ -46,26 +61,23 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # 4) Preprocessing
-numeric_features = [
-    "sowing_doy", "season_total_rainfall_mm", "season_avg_temp_c", 
-    "season_avg_humidity", "soil_pH", "soil_N_kg_ha", "soil_P_kg_ha", 
-    "soil_K_kg_ha", "organic_carbon_pct", "soil_moisture_pct"
-]
+# Only categorical features as inputs
 categorical_features = ["district", "crop", "season"]
+numeric_features = ["sowing_doy"]
+
+categorical_transformer = Pipeline(steps=[
+    ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+    ("ohe", OneHotEncoder(handle_unknown="ignore"))
+])
 
 numeric_transformer = Pipeline(steps=[
     ("imputer", SimpleImputer(strategy="median")),
     ("scaler", StandardScaler())
 ])
 
-categorical_transformer = Pipeline(steps=[
-    ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
-    ("ohe", OneHotEncoder(handle_unknown="ignore", sparse=False))
-])
-
 preprocessor = ColumnTransformer(transformers=[
-    ("num", numeric_transformer, numeric_features),
-    ("cat", categorical_transformer, categorical_features)
+    ("cat", categorical_transformer, categorical_features),
+    ("num", numeric_transformer, numeric_features)
 ], remainder="drop")
 
 # 5) Model: Multi-output RandomForest
@@ -78,14 +90,17 @@ pipeline = Pipeline(steps=[
 ])
 
 # 6) Train model
+print("Training model...")
 pipeline.fit(X_train, y_train)
+print("Model training completed!")
 
 # 7) Evaluation
 y_pred = pipeline.predict(X_test)
 
 def print_metrics(y_true, y_pred, name):
     for i, col in enumerate(y_true.columns):
-        rmse = mean_squared_error(y_true[col], y_pred[:, i], squared=False)
+        mse = mean_squared_error(y_true[col], y_pred[:, i])
+        rmse = np.sqrt(mse)
         mae = mean_absolute_error(y_true[col], y_pred[:, i])
         r2 = r2_score(y_true[col], y_pred[:, i])
         print(f"{name} - {col}: RMSE={rmse:.2f}, MAE={mae:.2f}, R2={r2:.3f}")
@@ -95,3 +110,8 @@ print_metrics(y_test, y_pred, "Test Set")
 # 8) Save pipeline
 joblib.dump(pipeline, "odisha_crop_pipeline.joblib")
 print("✅ Model trained and saved as odisha_crop_pipeline.joblib")
+
+# Print model info for API
+print(f"\nModel info for API:")
+print(f"Number of outputs: {len(target_cols)}")
+print(f"Output columns: {target_cols}")
